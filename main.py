@@ -14,8 +14,10 @@ import uvicorn
 import json
 import asyncio
 import logging
+from aiogram.exceptions import TelegramBadRequest
 import sys
 import aiohttp
+from dbmedia.schemas import UserCheck,ChannelCheckResponse
 
 import os
 
@@ -39,6 +41,8 @@ from aiogram.enums import ChatMemberStatus
 from dbmedia.media import challengeinfo
 
 from dbmedia.states import consult
+
+import aiosqlite
 
 
 # импорты роутеров
@@ -74,6 +78,7 @@ groupid = os.getenv("groupid")
 bdgroupid = os.getenv("bdgroupid")
 BASE_WEBHOOK_URL = os.getenv("BASE_WEBHOOK_URL")
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH")
+CHANNEL_ID = os.getenv("Channel")
 
 
 # Настройки вебхука
@@ -119,6 +124,37 @@ async def webhook_handler(request: Request):
 async def home():
     return {"message": "Bot Webhook is working!"}
 
+
+@app.post("/user_in_channel",response_model=ChannelCheckResponse)
+async def is_user_in_channel(bot, request : UserCheck) -> bool:
+    try:
+        channel_id = CHANNEL_ID
+        user_id = request.user_id
+        member = await bot.get_chat_member(chat_id=channel_id, user_id=user_id)
+        # Проверяем статус пользователя
+        if member.status in ['member', 'administrator', 'creator']:
+            return ChannelCheckResponse(
+                is_member=True
+            )
+        elif member.status in ['left', 'kicked']:
+            return ChannelCheckResponse(
+                is_member=False
+            )
+        else:
+            return ChannelCheckResponse(
+                is_member=False
+            )
+    except TelegramBadRequest as e:
+        # Пользователь не найден в канале
+        if "user not found" in str(e).lower():
+            return ChannelCheckResponse(
+                is_member=False
+            )
+        # Другие ошибки
+        print(f"Ошибка при проверке: {e}")
+        return ChannelCheckResponse(
+                is_member=False
+            )
 
 
 
@@ -267,6 +303,97 @@ async def getconfirmation(message: Message, state: FSMContext):
             await message.answer("Вы отменили рассылку!")
             await state.clear()
             return
+
+################################################    
+
+
+
+
+
+@dp.message(Command("newinfo"))
+async def newsendall(message: Message):
+    username = message.from_user.username
+    CONFIRM = False
+    logging.warning(f"Пользователь {username} вызвал /newinfo")
+    message_text = """Привет всем участникам челленджа!
+<b>Чтобы мы смогли выбрать победителей, убедитесь что у вас аккаунт в инстаграм открытый и в актуальных есть все выполненные задания.</b>
+Пожалуйста подтвердите свое участие в челлендже и выполнении условий.
+<b>‼️Нажмите да если выполнили все задания, и у вас открытый аккаунт в инстаграм. ‼️</b>
+"""
+    if CONFIRM==True:
+        return
+    await message.answer(message_text, parse_mode="HTML", reply_markup=buttons.participating)
+    CONFIRM = True
+    user_ids = list(set(await get_all_users()))  # уникальность заранее
+    sent_users = set()
+    j = 0
+    for i in user_ids:
+        try:
+            if i in sent_users:
+                continue
+            else:
+                await bot.send_message(
+                    chat_id=i,
+                    text=message_text,
+                    reply_markup=buttons.participating
+                )
+                sent_users.add(i)
+            j += 1
+        except TelegramForbiddenError:
+            logging.warning(f"Пользователь {i} заблокировал бота.")
+        except Exception as e:
+            logging.warning(f"Произошла ошибка при отправке сообщения пользователю {i}: {e}")
+        finally:
+            await asyncio.sleep(0.50)  # Добавляем задержку между сообщениям
+    await message.answer(f"Количество успешно отправленных рассылок: {j}")
+    await message.answer(f"Пользователи в SET {len(sent_users)}")
+    
+    
+
+
+@dp.callback_query(lambda callback_query: callback_query.data in ["yes_i_am", "no_im_not"])
+async def get_answer_from_participate(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if callback.data == "yes_i_am":
+        await callback.message.answer("Спасибо за ответ!")
+        async with aiosqlite.connect('users.db') as db:
+            answer = "Да"
+            await db.execute('''
+                UPDATE challenges
+                SET answer_status = ?
+                WHERE user_id = ?
+            ''', (answer, user_id))
+            await db.commit()
+            try:
+                await callback.message.delete()
+            except Exception as e:
+                logging.warning(f"Не удалось удалить сообщение: {e}")
+
+            
+    else:
+        await callback.message.answer("Спасибо за ответ!")
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 async def senddbfile():
