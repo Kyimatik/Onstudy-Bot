@@ -126,7 +126,7 @@ async def home():
 
 
 @app.post("/user_in_channel",response_model=ChannelCheckResponse)
-async def is_user_in_channel(bot, request : UserCheck) -> bool:
+async def is_user_in_channel( request : UserCheck) -> bool:
     try:
         channel_id = CHANNEL_ID
         user_id = request.user_id
